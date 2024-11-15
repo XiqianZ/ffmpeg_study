@@ -18,6 +18,25 @@ typedef websocketpp::client<websocketpp::config::asio_client> client;
 
 FrameHandler& frameHandler = FrameHandler::getInstance();
 
+cv::Mat cvFrame(540, 960, CV_8UC3);
+
+void displayFrame(AVFrame* frame, AVCodecContext* codecContext) {
+	SwsContext* swsCtx = sws_getContext(
+		codecContext->width, codecContext->height, codecContext->pix_fmt,
+		codecContext->width, codecContext->height, AV_PIX_FMT_BGR24,
+		SWS_BILINEAR, nullptr, nullptr, nullptr);
+
+	cv::Mat frameBGR(codecContext->height, codecContext->width, CV_8UC3);
+	uint8_t* data[1] = { frameBGR.data };
+	int linesize[1] = { static_cast<int>(frameBGR.step[0]) };
+
+	sws_scale(swsCtx, frame->data, frame->linesize, 0, codecContext->height, data, linesize);
+	cv::imshow("Video", frameBGR);
+	cv::waitKey(1);
+
+	sws_freeContext(swsCtx);
+}
+
 
 void on_open(websocketpp::connection_hdl hdl, client* c) {
 	std::cout << "WebSocket connection opened!" << std::endl;
@@ -29,7 +48,6 @@ void on_open(websocketpp::connection_hdl hdl, client* c) {
 	}
 	std::string payload = "Hello World!";
 	//std::string payload = "{\"userKey\":\"API_KEY\", \"symbol\":\"EURUSD,GBPUSD\"}";
-	
 }
 
 
@@ -48,10 +66,21 @@ void on_message(websocketpp::connection_hdl hdl, client::message_ptr msg, client
 	}
 	else if (msg->get_opcode() == websocketpp::frame::opcode::binary) {
 		std::cout << "Received binary message with size: "<<msg->get_payload().size()/1024<<" KB" << std::endl;
-		frameHandler.decodeFrame(reinterpret_cast<const uint8_t*>(msg->get_payload().data()), msg->get_payload().size());
-		frameHandler.displayFrameByOpenCV();
+		//frameHandler.decodeFrame(reinterpret_cast<const uint8_t*>(msg->get_payload().data()), msg->get_payload().size());
+		//frameHandler.displayFrameByOpenCV();
+		//frameHandler.decodeFrame(	//Todo
+		//	reinterpret_cast<const uint8_t*>(msg->get_payload().data()),
+		//	msg->get_payload().size(),
+		//	frameHandler.getPH264CodecContext(),
+		//	frameHandler.getPH264Packet(),
+		//	frameHandler.getPH264Frame()
+		//);
+		frameHandler.decodeH264Frame(reinterpret_cast<const uint8_t*>(msg->get_payload().data()), msg->get_payload().size());
+		frameHandler.displayH264FrameByOpenCV();
+		//frameHandler.convertAVFrameToMat(frameHandler.getPH264CodecContext(), frameHandler.getPH264Frame(), cvFrame);
+		//cv::imshow("Video", cvFrame);
+		//cv::pollKey();
 	}
-
 }
 
 
@@ -71,7 +100,8 @@ int main(int argc, char* argv[]) {
 		uri = argv[1];
 	}
 
-	frameHandler.prepareDecoder();
+	//frameHandler.prepareDecoder();
+	frameHandler.prepareH264Decoder();
 	
 	
 

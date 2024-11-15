@@ -25,7 +25,8 @@ int main()
 		frameServer.setFrameHandler(&frameHandler);
 		frameHandler.init();
 
-		thread frame_handler_thread(&FrameHandler::retriveFrameFromCamera, &frameHandler);
+		//thread frame_handler_thread(&FrameHandler::retriveFrameFromCamera, &frameHandler);
+		thread frame_handler_thread_openCV(&FrameHandler::retriveFrameFromeCameraOpenCV, &frameHandler);
 		thread send_frame_thread(&FrameServer::run_send_frame, &frameServer);
 		thread server_porceed_thread(&FrameServer::proceed_messages, &frameServer);
 

@@ -97,7 +97,7 @@ void FrameServer::wait_frame_ready() {
 
 void FrameServer::sendFrame(std::vector<uint8_t> data) {
 	//std::lock_guard<std::mutex> lock(send_mutex);
-
+	std::cout<<"Send data size in KB: "<<data.size()/1024<<std::endl;
 	con_list::iterator it;
 	for (it = m_connections.begin(); it != m_connections.end(); ++it) {
 		m_endpoint.send(*it,

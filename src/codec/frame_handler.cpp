@@ -19,6 +19,19 @@ FrameHandler::~FrameHandler() {
 void FrameHandler::init() {
     //ffmpeg
     avdevice_register_all();
+    //prepareOriginCodec();
+
+
+    //Allocate frame and packet
+    pFrame = av_frame_alloc();
+    pPacket = av_packet_alloc();
+
+
+    prepareH264Decoder();   //Todo Test
+}
+
+
+void FrameHandler::prepareOriginCodec() {
     const char* deviceName = "video=Integrated Camera";
     const AVInputFormat* pInputFormat = av_find_input_format("dshow");
     AVDictionary* pDictionary = NULL;
@@ -31,18 +44,18 @@ void FrameHandler::init() {
         std::abort();
     }
     if (av_dict_set(&pDictionary, "fflags", "nobuffer", 0) != 0) {
-		std::cout << "Could not set fflags" << std::endl;
-		std::abort();
-	}
+        std::cout << "Could not set fflags" << std::endl;
+        std::abort();
+    }
     if (av_dict_set(&pDictionary, "framedrop", "1", 0) != 0) {
-        std::cout<< "Could not set framedrop" << std::endl;
+        std::cout << "Could not set framedrop" << std::endl;
         std::abort();
     }
     if (av_dict_set(&pDictionary, "flags", "low_delay", 0) != 0) {
-		std::cout << "Could not set flags" << std::endl;
-		std::abort();
-	}
-    
+        std::cout << "Could not set flags" << std::endl;
+        std::abort();
+    }
+
 
 
     if (avformat_open_input(&pFormatContext, deviceName, pInputFormat, &pDictionary) != 0) {
@@ -96,13 +109,6 @@ void FrameHandler::init() {
         std::cout << "Could not open codec" << std::endl;
         return;
     }
-
-    //Allocate frame and packet
-    pFrame = av_frame_alloc();
-    pPacket = av_packet_alloc();
-
-
-    prepareH264Decoder();   //Todo Test
 }
 
 
@@ -110,33 +116,22 @@ void FrameHandler::init() {
 void FrameHandler::convertAVFrameToMat(AVCodecContext* codec_ctx, AVFrame* frame, cv::Mat& img) {
     // Initialize the SwsContext for converting the pixel format
     struct SwsContext* sws_ctx = sws_getContext(
-        codec_ctx->width,
-        codec_ctx->height,
-        codec_ctx->pix_fmt,
-        codec_ctx->width,
-        codec_ctx->height,
-        AV_PIX_FMT_BGR24,
-        SWS_BILINEAR,
-        nullptr, nullptr, nullptr
-    );
+        codec_ctx->width, codec_ctx->height, codec_ctx->pix_fmt,
+        codec_ctx->width, codec_ctx->height, AV_PIX_FMT_BGR24,
+        SWS_BILINEAR, nullptr, nullptr, nullptr);
 
     // Create a cv::Mat to hold the BGR image
     img.create(codec_ctx->height, codec_ctx->width, CV_8UC3);
 
-    // Allocate a buffer to store the converted data
     uint8_t* dest[4] = { img.data, nullptr, nullptr, nullptr };
     int dest_linesize[4] = { img.step[0], 0, 0, 0 };
 
-    // Convert the frame to BGR and store it in the img Mat
     sws_scale(sws_ctx, frame->data, frame->linesize, 0, codec_ctx->height, dest, dest_linesize);
-
-
-    int frameSizeKB = (img.cols * img.rows * img.channels()) / 1024;
+    //int frameSizeKB = (img.cols * img.rows * img.channels()) / 1024;
     //std::cout << "CV2 Frame size: " << frameSizeKB << " KB" << " Width: " << img.cols << " Height: " << img.rows << std::endl;
-
-    // Free the SwsContext after use
     sws_freeContext(sws_ctx);
 }
+
 
 
 
@@ -182,53 +177,12 @@ void FrameHandler::retriveFrameFromCamera() {
                 break;
             }
 
-
-
-            /*response = avcodec_send_frame(pH264CodecContext, pFrame);
-            if (response < 0) {
-                std::cout << "Error sending frame to H.264 codec context" << std::endl;
-                avcodec_free_context(&pH264CodecContext);
-                av_packet_free(&pH264Packet);
-                break;
-            }
-
-            response = avcodec_receive_packet(pH264CodecContext, pH264Packet);
-            if (response == AVERROR(EAGAIN) || response == AVERROR_EOF) {
-                avcodec_free_context(&pH264CodecContext);
-                av_packet_free(&pH264Packet);
-                continue;
-            }
-            else if (response < 0) {
-                std::cout << "Error receiving packet from H.264 codec context" << std::endl;
-                avcodec_free_context(&pH264CodecContext);
-                av_packet_free(&pH264Packet);
-                break;
-            }
-
-            int H264PacketSize = pH264Packet->size / 1024;
-            std::cout << "pH264Packet size: " << H264PacketSize << " KB" << std::endl;
-
-            std::cout << "Frame " << pCodecContext->frame_num << " (type=" << av_get_picture_type_char(pFrame->pict_type)
-                << ", size=" << pFrame->pkt_size / 1024
-                << "Kb) key_frame " << pFrame->key_frame
-                << " Width and Height: " << pFrame->width << "x" << pFrame->height
-                << " Codec Name: " << avcodec_get_name(pH264CodecContext->codec_id) << " Codec ID: " << pH264CodecContext->codec_id
-                << std::endl;
-
-            av_packet_unref(pH264Packet);
-            avcodec_free_context(&pH264CodecContext);*/
-
-            // Use pH264Packet as needed
-            // ...
-
-            //eFrameReady = false;
             {
                 std::lock_guard<std::mutex> lock(eFrameLock);
                 encoded_frame.clear();
                 encoded_frame.resize(pPacket->size);
                 memcpy(encoded_frame.data(), pPacket->data, pPacket->size);
             }
-            //eFrameReady = true;
             //std::cout << "Frame " << pCodecContext->frame_num << " (type=" << av_get_picture_type_char(pFrame->pict_type)
             //    << ", size=" << pFrame->pkt_size / 1024
             //    << "Kb) key_frame " << pFrame->key_frame
@@ -247,6 +201,71 @@ void FrameHandler::retriveFrameFromCamera() {
 
     }
 }
+
+
+
+void FrameHandler::retriveFrameFromeCameraOpenCV() {
+    cv::Mat frameBGR;
+    cv::VideoCapture cap(0);
+    cap.set(cv::CAP_PROP_FRAME_WIDTH, 960);
+    cap.set(cv::CAP_PROP_FRAME_HEIGHT, 540);
+    int response = -1;
+    bool getFrame = true;
+    int64_t pts = 0;
+
+    while (getFrame) {
+		cap >> frameBGR;
+		cv::imshow("Origin OpenCV Cam", frameBGR);
+        //cv::waitKey(1);
+
+        if(cv::waitKey(1) == 27) {
+			break;
+		}
+
+        if (frameBGR.empty()) break;
+        int size_in_KB = frameBGR.total() * frameBGR.elemSize() / 1024;
+        std::cout << "Frame size: " << frameBGR.size() << "| Total Size:" << size_in_KB << "KB" << std::endl;
+        pFrameReady = false;
+
+        const int stride[] = { static_cast<int>(frameBGR.step[0]) };
+        sws_scale(pH264SwsCtx, &frameBGR.data, stride, 0, pH264CodecContext->height, pH264Frame->data, pH264Frame->linesize);
+        pH264Frame->pts = pts++;
+        if(avcodec_send_frame(pH264CodecContext, pH264Frame)<0){
+			std::cout << "Error sending frame to codec context" << std::endl;
+			break;
+		}
+        //while (avcodec_receive_packet(pH264CodecContext, pH264Packet) == 0) {   //Todo test
+        //    av_packet_unref(pH264Packet);
+        //}
+        response = avcodec_receive_packet(pH264CodecContext, pH264Packet);
+        if (response == AVERROR(EAGAIN) || response == AVERROR_EOF) {
+			continue;
+		} else if (response < 0) {
+			std::cout << "Error receiving packet from codec context" << std::endl;
+			break;
+		}
+
+        {
+            std::lock_guard<std::mutex> lock(eFrameLock);
+            encoded_frame.clear();
+            encoded_frame.resize(pH264Packet->size);
+            memcpy(encoded_frame.data(), pH264Packet->data, pH264Packet->size);
+            //memcpy(encoded_frame.data(), pH264Frame->data, pH264Packet->size);
+        }
+
+        size_t numElements = encoded_frame.size();
+        size_t sizeInBytes = numElements * sizeof(encoded_frame[0]);
+        std::cout<< "encoded_frame size: "<< sizeInBytes << "byte | "<< sizeInBytes/1024<<"KB" << std::endl;
+
+        pFrameReady = true;
+        pFrameReadyCond.notify_one();
+        av_packet_unref(pH264Packet);
+	}
+}
+
+
+
+
 
 
 bool FrameHandler::readOneFrameFromCamera() {
@@ -298,11 +317,17 @@ bool FrameHandler::readOneFrameFromCamera() {
 void FrameHandler::displayFrameByOpenCV() {
     convertAVFrameToMat(pCodecContext, pFrame, openCVframe);
     cv::imshow("Camera", openCVframe);
-    //cv::waitKey(1);
     cv::pollKey();
     //if (cv::waitKey(1) == 27) {
     //    return;
     //}
+}
+
+
+void FrameHandler::displayH264FrameByOpenCV() {
+    convertAVFrameToMat(pH264CodecContext, pH264Frame, openCVframe);
+    cv::imshow("H264", openCVframe);
+    cv::pollKey();
 }
 
 
@@ -333,40 +358,62 @@ void FrameHandler::prepareH264Decoder() {
 
     const AVCodec* pH264Codec = avcodec_find_encoder(AV_CODEC_ID_H264);
     if (!pH264Codec) {
-        std::cout << "H.264 codec not found" << std::endl;
+        std::cerr << "H.264 codec not found" << std::endl;
         av_packet_free(&pH264Packet);
-        return;
     }
-
     pH264CodecContext = avcodec_alloc_context3(pH264Codec);
     if (!pH264CodecContext) {
-        std::cout << "Could not allocate H.264 codec context" << std::endl;
+        std::cerr << "Could not allocate H.264 codec context" << std::endl;
         av_packet_free(&pH264Packet);
-        return;
     }
-
     pH264CodecContext->bit_rate = 400000;
-    pH264CodecContext->width = pFrame->width;
-    pH264CodecContext->height = pFrame->height;
-    pH264CodecContext->time_base = { 1, 25 };
-    pH264CodecContext->framerate = { 25, 1 };
-    pH264CodecContext->gop_size = 10;
+    pH264CodecContext->width = RAW_FRAME_WIDTH;
+    pH264CodecContext->height = RAW_FRAME_HEIGHT;
+    pH264CodecContext->time_base = { 1, 30 };
+    pH264CodecContext->framerate = { 30, 1 };
+    pH264CodecContext->gop_size = 1;
     pH264CodecContext->max_b_frames = 1;
     pH264CodecContext->pix_fmt = AV_PIX_FMT_YUV420P;
-
+    CoUninitialize();
     if (avcodec_open2(pH264CodecContext, pH264Codec, NULL) < 0) {
-        std::cout << "Could not open H.264 codec" << std::endl;
+        std::cerr << "Could not open H.264 codec" << std::endl;
         avcodec_free_context(&pH264CodecContext);
         av_packet_free(&pH264Packet);
-        return;
+    }
+    pH264Frame = av_frame_alloc();
+    if(!pH264Frame) {
+        avcodec_free_context(&pH264CodecContext);
+		std::cerr << "Could not allocate H.264 frame" << std::endl;
+	}
+    pH264Frame->format = pH264CodecContext->pix_fmt;
+    pH264Frame->width = pH264CodecContext->width;
+    pH264Frame->height = pH264CodecContext->height;
+    if (av_frame_get_buffer(pH264Frame, 0) < 0) {
+        std::cerr << "Error: Could not allocate frame buffer" << std::endl;
+        av_frame_free(&pH264Frame);
+        avcodec_free_context(&pH264CodecContext);
     }
 
     pH264Packet = av_packet_alloc();    //Todo test
     if (!pH264Packet) {
-        std::cout << "Could not allocate H.264 packet" << std::endl;
-        return;
+        std::cerr << "Could not allocate H.264 packet" << std::endl;
+        av_frame_free(&pH264Frame);
+        avcodec_free_context(&pH264CodecContext);
     }
-}
+    pH264SwsCtx = sws_getContext(       //Todo test
+        pH264CodecContext->width, pH264CodecContext->height, AV_PIX_FMT_BGR24,
+        pH264CodecContext->width, pH264CodecContext->height, pH264CodecContext->pix_fmt,
+        SWS_BILINEAR, nullptr, nullptr, nullptr);
+    if (!pH264SwsCtx) {
+        std::cerr << "Error: Could not initialize sws context" << std::endl;
+        av_packet_free(&pH264Packet);
+		av_frame_free(&pH264Frame);
+		avcodec_free_context(&pH264CodecContext);
+    }
+
+ }
+
+
 
 
 
@@ -411,4 +458,54 @@ void FrameHandler::decodeFrame(const uint8_t* data, size_t data_size) {
 	}
 
 	av_packet_free(&pPacket);
+}
+
+
+void FrameHandler::decodeFrame(const uint8_t* data, size_t data_size, AVCodecContext* pCodecContex, AVPacket* pPacket, AVFrame* pFrame) {
+    pFrame = av_frame_alloc();
+    pPacket = av_packet_alloc();
+
+    av_new_packet(pPacket, data_size);
+    memcpy(pPacket->data, data, data_size);
+    std::cout<<"pPacket->size: "<<pPacket->size<<std::endl;   //Todo test"
+
+    int ret = avcodec_send_packet(pCodecContext, pPacket);
+    if (ret < 0) {
+        std::cout << "Error sending packet to codec context" << std::endl;
+        return;
+    }
+    ret = avcodec_receive_frame(pCodecContext, pFrame);
+    if (ret < 0) {
+        std::cout << "Error receiving frame from codec context" << std::endl;
+        return;
+    }
+
+    av_packet_free(&pPacket);
+}
+
+
+void FrameHandler::decodeH264Frame(const uint8_t* data, size_t data_size) {
+    //SwsContext* pH264SwsCtx = NULL;
+    pH264Packet = av_packet_alloc();
+    pH264Frame = av_frame_alloc();
+    pH264Frame->format = pH264CodecContext->pix_fmt;
+    pH264Frame->width = pH264CodecContext->width;
+    pH264Frame->height = pH264CodecContext->height;
+
+    av_new_packet(pH264Packet, data_size);
+    memcpy(pH264Packet->data, data, data_size);
+
+    int ret = avcodec_send_packet(pH264CodecContext, pH264Packet);
+    if (ret < 0) {
+        std::cout << "decodeH264Frame Error sending packet to codec context ret: " <<ret<< std::endl;
+        //return;
+    }
+    ret = avcodec_receive_frame(pH264CodecContext, pH264Frame);
+    if (ret < 0) {
+        std::cout << "decodeH264Frame Error receiving frame from codec context" << std::endl;
+        //return;
+    }
+
+    av_packet_free(&pH264Packet);
+
 }

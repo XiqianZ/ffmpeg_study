@@ -4,7 +4,6 @@
 //ffmpeg
 extern "C" {
 #include <libavcodec/avcodec.h>
-#include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/avutil.h>
@@ -40,14 +39,27 @@ public:
 	void init();
 
 	void retriveFrameFromCamera();
+	void retriveFrameFromeCameraOpenCV();
 	bool readOneFrameFromCamera();
 	void displayFrameByOpenCV();
+	void displayH264FrameByOpenCV();
 
+	void prepareOriginCodec();
 	void prepareH264Decoder();
 
 
 	void prepareDecoder();
 	void decodeFrame(const uint8_t* data, size_t data_size);
+	void decodeFrame(const uint8_t* data, size_t data_size, AVCodecContext* pCodecContex, AVPacket* pPacket, AVFrame* pFrame);
+	void decodeH264Frame(const uint8_t* data, size_t data_size);
+
+
+	void convertAVFrameToMat(AVCodecContext* codec_ctx, AVFrame* frame, cv::Mat& img);
+
+
+	AVCodecContext* getPH264CodecContext() { return pH264CodecContext; }
+	AVPacket* getPH264Packet() { return pH264Packet; }
+	AVFrame* getPH264Frame() { return pH264Frame; }
 
 
 	AVFrame* getFrame() {return pFrame;}
@@ -65,7 +77,6 @@ private:
 	FrameHandler& operator=(const FrameHandler&) = delete;
 	~FrameHandler();
 
-	void convertAVFrameToMat(AVCodecContext* codec_ctx, AVFrame* frame, cv::Mat& img);
 
 	bool isLastFrame();
 	bool isLastPacket();
@@ -81,6 +92,8 @@ private:
 	//AVCodec* pH264Codec = NULL;
 	AVCodecContext* pH264CodecContext = NULL;
 	AVPacket* pH264Packet = NULL;
+	AVFrame* pH264Frame = NULL;
+	SwsContext* pH264SwsCtx = NULL;
 
 
 

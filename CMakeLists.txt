@@ -92,10 +92,53 @@ endif()
 #target_link_libraries(codec PRIVATE ${OpenCV_LIBS} avcodec avformat avutil avdevice swscale)
 
 
-add_executable(codec264 "main_264codec.cpp")
-target_include_directories(codec264 PRIVATE vendors/include vendors/ffmpeg/include)
-target_link_directories(codec264 PRIVATE vendors/lib vendors/ffmpeg/lib)
-target_link_libraries(codec264 PRIVATE ${OpenCV_LIBS} avcodec avformat avutil avdevice swscale)
+#add_executable(codec264 "main_264codec.cpp")
+#target_include_directories(codec264 PRIVATE vendors/include vendors/ffmpeg/include)
+#target_link_directories(codec264 PRIVATE vendors/lib vendors/ffmpeg/lib)
+#target_link_libraries(codec264 PRIVATE ${OpenCV_LIBS} avcodec avformat avutil avdevice swscale)
+
+
+
+#add_executable(encode_test "main_encode_test_origin.cpp "main_transcodec_test.cpp"")
+#target_include_directories(encode_test PRIVATE vendors/include vendors/ffmpeg/include)
+#target_link_directories(encode_test PRIVATE vendors/lib vendors/ffmpeg/lib)
+#target_link_libraries(encode_test PRIVATE ${OpenCV_LIBS} avcodec avformat avutil avdevice swscale)
+
+
+
+#add_executable(encode_test_2 "main_encode_test_2.cpp" "main_webcam_record.cpp")
+#target_include_directories(encode_test_2 PRIVATE vendors/include vendors/ffmpeg/include)
+#target_link_directories(encode_test_2 PRIVATE vendors/lib vendors/ffmpeg/lib)
+#target_link_libraries(encode_test_2 PRIVATE ${OpenCV_LIBS} avcodec avformat avutil avdevice swscale)
+
+
+
+#add_executable(decode_test "main_decode_test.cpp")
+#target_include_directories(decode_test PRIVATE vendors/include vendors/ffmpeg/include)
+#target_link_directories(decode_test PRIVATE vendors/lib vendors/ffmpeg/lib)
+#target_link_libraries(decode_test PRIVATE ${OpenCV_LIBS} avcodec avformat avutil avdevice swscale avfilter)
+
+
+
+#add_executable(webcam_record "main_webcam_record.cpp")
+#target_include_directories(webcam_record PRIVATE vendors/include vendors/ffmpeg/include)
+#target_link_directories(webcam_record PRIVATE vendors/lib vendors/ffmpeg/lib)
+#target_link_libraries(webcam_record PRIVATE ${OpenCV_LIBS} avcodec avformat avutil avdevice swscale avfilter)
+
+
+
+add_executable(trans_test "main_transcodec_test.cpp")
+target_include_directories(trans_test PRIVATE vendors/include vendors/ffmpeg/include src/codec)
+target_link_directories(trans_test PRIVATE vendors/lib vendors/ffmpeg/lib)
+target_link_libraries(trans_test PRIVATE ${OpenCV_LIBS} avcodec avformat avutil avdevice swscale avfilter)
+
+
+
+add_executable(live_trans "main_live_transcodec.cpp" ${SRC_CODEC} ${SRC_SERVER})
+target_include_directories(live_trans PRIVATE vendors/include vendors/ffmpeg/include src/codec src/server)
+target_link_directories(live_trans PRIVATE vendors/lib vendors/ffmpeg/lib)
+target_link_libraries(live_trans PRIVATE ${OpenCV_LIBS} avcodec avformat avutil avdevice swscale avfilter)
+
 
 
 
