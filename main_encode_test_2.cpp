@@ -60,7 +60,7 @@ int main(int argc, char** argv)
 
     std::cout<<"Hello encode test"<<std::endl;
 
-    filename = "test2.mp4"; //argv[1];
+    filename = "test2_random.mp4"; //argv[1];
 
     /* find the mpeg1video encoder */
     //codec = avcodec_find_encoder_by_name("mpeg1video");
@@ -104,7 +104,7 @@ int main(int argc, char** argv)
         exit(1);
     }
     /*Prepare output file*/
-    const char* outfilename = "out.mp4";
+    const char* outfilename = "out.avi";
     f = fopen(outfilename, "wb");
     if (!f) {
         fprintf(stderr, "Could not open %s\n", outfilename);
@@ -129,7 +129,7 @@ int main(int argc, char** argv)
     }
 
     /* encode 1 second of video */
-    for (i = 0; i < FPS; i++) {
+    for (i = 0; i < FPS*10; i++) {
         fflush(stdout);
         /* Make sure the frame data is writable.
            On the first round, the frame is fresh from av_frame_get_buffer()

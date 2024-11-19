@@ -9,10 +9,13 @@ int FrameCodec::encode_write_frame(unsigned int stream_index, int flush) {
 
 	av_log(NULL, AV_LOG_INFO, "Encoding frame\n");
 	av_packet_unref(enc_pkt);
+	//save previous pts
+
 
 	if (filt_frame && filt_frame->pts != AV_NOPTS_VALUE) {
 		//filt_frame->pts = av_rescale_q(filt_frame->pts, filter->buffersink_ctx->inputs[0]->time_base, stream->enc_ctx->time_base);
 		filt_frame->pts = av_rescale_q(filt_frame->pts, filt_frame->time_base, stream->enc_ctx->time_base);
+		std::cout<<"filt_frame->pts: "<<filt_frame->pts<<std::endl;
 	}
 	ret = avcodec_send_frame(stream->enc_ctx, filt_frame);
 	if (ret < 0) {
@@ -21,12 +24,23 @@ int FrameCodec::encode_write_frame(unsigned int stream_index, int flush) {
 	}
 	while (ret >= 0) {
 		ret = avcodec_receive_packet(stream->enc_ctx, enc_pkt);
+
 		if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
 			return 0;
 		}
+
 		/*prepare raw packet Todo*/
 		enc_pkt->stream_index = stream_index;
 		av_packet_rescale_ts(enc_pkt, stream->enc_ctx->time_base, ofmt_ctx->streams[stream_index]->time_base);
+
+
+		if (enc_pkt->dts <= last_pts) {
+			enc_pkt->dts = last_pts + 1;
+			enc_pkt->pts = last_pts + 1;
+		}
+		std::cout<<"enc_pkt->dts: "<<enc_pkt->dts<<" | enc_pkt->pts: "<<enc_pkt->pts<<std::endl;
+
+		last_pts = enc_pkt->dts;
 		
 		av_log(NULL, AV_LOG_INFO, "Muxing frame\n");
 		/* mux encoded frame */
@@ -197,6 +211,201 @@ int FrameCodec::open_intput_cam(const char* cam_name) {
 	}
 }
 
+
+int FrameCodec::open_input_cam_smp(const char* cam_name) {
+	int ret = 0;
+	unsigned int stream_index = 0;
+	avdevice_register_all();
+
+	const AVInputFormat* ifmt = av_find_input_format("dshow");
+	AVDictionary* options = NULL;
+	av_dict_set(&options, "video_size", "960*540", 0);
+	av_dict_set(&options, "framerate", "30", 0);
+	av_dict_set(&options, "fflags", "nobuffer", 0);
+	av_dict_set(&options, "framedrop", "1", 0);
+	av_dict_set(&options, "flags", "low_delay", 0);
+	
+	ret = avformat_open_input(&ifmt_ctx, cam_name, ifmt, &options); assert(ret == 0 && "avformat_open_input failed");
+	ret = avformat_find_stream_info(ifmt_ctx, NULL); assert(ret >= 0 && "avformat_find_stream_info failed");
+	stream_ctx = reinterpret_cast<StreamContext*>(av_calloc(ifmt_ctx->nb_streams, sizeof(*stream_ctx)));
+	
+	AVStream* stream = ifmt_ctx->streams[stream_index];
+	const AVCodec* dec = avcodec_find_decoder(stream->codecpar->codec_id); assert(dec);	//This will give "dec->name: rawvideo"
+	AVCodecContext* codec_ctx = avcodec_alloc_context3(dec); assert(codec_ctx);
+	ret = avcodec_parameters_to_context(codec_ctx, stream->codecpar); assert(ret >= 0);
+	codec_ctx->pkt_timebase = stream->time_base;
+	codec_ctx->framerate = av_guess_frame_rate(ifmt_ctx, stream, NULL);
+	ret = avcodec_open2(codec_ctx, dec, NULL); assert(ret >= 0);
+
+	stream_ctx[stream_index].dec_ctx = codec_ctx;
+	stream_ctx[stream_index].dec_frame = av_frame_alloc(); assert(stream_ctx[stream_index].dec_frame);
+
+	av_dump_format(ifmt_ctx, 0, cam_name, 0);	//print input file information
+
+	return ret;
+}
+
+
+int FrameCodec::display_through_opencv() {	//This is still raw video, not encoded yet
+	int ret = 0;
+	unsigned int stream_index = 0;
+	AVPacket* packet = NULL;
+	packet = av_packet_alloc(); assert(packet);
+
+	struct SwsContext* sws_ctx = sws_getContext(
+		stream_ctx[stream_index].dec_ctx->width, stream_ctx[stream_index].dec_ctx->height, stream_ctx[stream_index].dec_ctx->pix_fmt,
+		stream_ctx[stream_index].dec_ctx->width, stream_ctx[stream_index].dec_ctx->height, AV_PIX_FMT_BGR24,
+		SWS_BILINEAR, NULL, NULL, NULL
+	); assert(sws_ctx);
+	openCVMat = cv::Mat(stream_ctx[stream_index].dec_ctx->height, stream_ctx[stream_index].dec_ctx->width, CV_8UC3);
+	decodedMat = cv::Mat(stream_ctx[stream_index].dec_ctx->height, stream_ctx[stream_index].dec_ctx->width, CV_8UC3);
+
+	while (1) {
+		ret = av_read_frame(ifmt_ctx, packet); assert(ret >= 0);
+		stream_index = packet->stream_index;
+
+		StreamContext* stream = &stream_ctx[stream_index];
+		ret = avcodec_send_packet(stream->dec_ctx, packet); assert(ret >= 0);
+		//ret = avcodec_send_packet(ifmt_ctx, packet); assert(ret >= 0);
+
+		while (ret >= 0) {
+			ret = avcodec_receive_frame(stream->dec_ctx, stream->dec_frame);
+			std::cout<<"ret: "<<ret<<std::endl;
+			if (ret < 0) break;
+
+			uint8_t* data[4] = { openCVMat.data, nullptr, nullptr, nullptr };
+			int linesize[4] = { openCVMat.step, 0, 0, 0 };
+			sws_scale(sws_ctx, stream->dec_frame->data, stream->dec_frame->linesize, 0, stream->dec_ctx->height, data, linesize);
+			cv::imshow("Raw", openCVMat);
+			cv::pollKey();
+
+
+			convert_frame(stream->dec_frame, &pframe420P, pEncCodecContext->pix_fmt);
+
+			ret = avcodec_send_frame(pEncCodecContext, pframe420P);
+			if (ret < 0) {
+				std::cout << "==Debug== avcodec_send_frame failed\n";
+				break;
+			}
+			std::cout<<"avcodec_send_frame ret: "<<ret<<std::endl;
+			//ret = avcodec_send_frame(stream->dec_ctx, stream->dec_frame);
+			while (ret >= 0) {
+				ret = avcodec_receive_packet(pEncCodecContext, packet);
+				std::cout<<"H264 packet size: "<<packet->size<<std::endl;
+				if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+					break;
+				}
+				else if (ret < 0) {
+					std::cout << "avcodec_receive_packet failed\n";
+					break;
+				}
+				else {
+
+					while (ret >= 0) {
+						AVFrame* decoded_frame = av_frame_alloc(); assert(decoded_frame);
+						decoded_frame->width = stream_ctx[stream_index].dec_ctx->width;
+						decoded_frame->height = stream_ctx[stream_index].dec_ctx->height;
+						decoded_frame->format = AV_PIX_FMT_YUV420P;
+
+
+						ret = avcodec_send_packet(pDecCodecContext, packet); //assert(ret >= 0);
+						std::cout<<"re-dec avcodec_send_packet packet size: "<<packet->size/1024<<"KB" << std::endl;
+
+						while (ret >= 0) {
+							ret = avcodec_receive_frame(pDecCodecContext, decoded_frame); //assert(ret >= 0);
+							std::cout<<"re-dec packet size: "<< decoded_frame->pkt_size <<std::endl;
+							SwsContext* sws_ctx = sws_getContext(
+								pDecCodecContext->width, pDecCodecContext->height, pDecCodecContext->pix_fmt,
+								pDecCodecContext->width, pDecCodecContext->height, AV_PIX_FMT_BGR24,
+								SWS_BILINEAR, NULL, NULL, NULL
+							); assert(sws_ctx);
+							uint8_t* data_dec[4] = { decodedMat.data, nullptr, nullptr, nullptr };
+							int linesize_dec[4] = { decodedMat.step, 0, 0, 0 };
+							sws_scale(sws_ctx, decoded_frame->data, decoded_frame->linesize, 0, pDecCodecContext->height, data_dec, linesize_dec);
+							cv::imshow("MPEG1VIDEO Codec", decodedMat);
+							cv::pollKey();
+							sws_freeContext(sws_ctx);
+						}
+					}
+
+				}
+			}
+		}
+		std::cout << "av_read_frame" << std::endl;
+		std::cout <<"packet size: "<<packet->size/1024<<std::endl;
+		av_packet_unref(packet);
+	}
+	return ret;
+}
+
+
+int FrameCodec::set_264_encode_smp() {
+	int ret = 0;
+	unsigned int stream_index = 0;
+	//CoUninitialize();
+	//const AVCodec* encoder = avcodec_find_encoder(AV_CODEC_ID_MPEG4); assert(encoder);
+	//const AVCodec* encoder = avcodec_find_encoder(AV_CODEC_ID_H264); assert(encoder);
+	const AVCodec* encoder = avcodec_find_encoder(AV_CODEC_ID_MPEG1VIDEO); assert(encoder);
+	pEncCodecContext = avcodec_alloc_context3(encoder); assert(pEncCodecContext);
+
+	pEncCodecContext->height = stream_ctx[stream_index].dec_ctx->height;
+	pEncCodecContext->width = stream_ctx[stream_index].dec_ctx->width;
+	pEncCodecContext->sample_aspect_ratio = stream_ctx[stream_index].dec_ctx->sample_aspect_ratio;
+	//pEncCodecContext->time_base = av_inv_q(stream_ctx[stream_index].dec_ctx->framerate);
+	pEncCodecContext->time_base = { 1, 30 };
+	pEncCodecContext->framerate = stream_ctx[stream_index].dec_ctx->framerate;
+	pEncCodecContext->gop_size = 1;
+	pEncCodecContext->max_b_frames = 1;
+	pEncCodecContext->bit_rate = 400000;
+	pEncCodecContext->pix_fmt = AV_PIX_FMT_YUV420P;
+	ret = avcodec_open2(pEncCodecContext, encoder, NULL); assert(ret >= 0);
+
+	return ret;
+}
+
+
+int FrameCodec::set_264_decode_smp() {
+	int ret = 0;
+	unsigned int stream_index = 0;
+	//CoUninitialize();
+	//const AVCodec* decoder = avcodec_find_decoder(AV_CODEC_ID_H264); assert(decoder);
+	//const AVCodec* decoder = avcodec_find_decoder(AV_CODEC_ID_MPEG4); assert(decoder);
+	const AVCodec* decoder = avcodec_find_decoder(AV_CODEC_ID_MPEG1VIDEO); assert(decoder);
+	pDecCodecContext = avcodec_alloc_context3(decoder); assert(pDecCodecContext);
+	pDecCodecContext->height = stream_ctx[stream_index].dec_ctx->height;
+	pDecCodecContext->width = stream_ctx[stream_index].dec_ctx->width;
+	pDecCodecContext->sample_aspect_ratio = stream_ctx[stream_index].dec_ctx->sample_aspect_ratio;
+	//pDecCodecContext->time_base = av_inv_q(stream_ctx[stream_index].dec_ctx->framerate);
+	pEncCodecContext->time_base = { 1, 30 };
+	pDecCodecContext->framerate = stream_ctx[stream_index].dec_ctx->framerate;
+	//pDecCodecContext->gop_size = 0;
+	//pDecCodecContext->max_b_frames = 0;
+	pDecCodecContext->bit_rate = 400000;
+	pDecCodecContext->pix_fmt = AV_PIX_FMT_YUV420P;
+	ret = avcodec_open2(pDecCodecContext, decoder, NULL); assert(ret >= 0);
+
+	return ret;
+}
+
+
+
+void FrameCodec::convertAVFrameToMat(AVCodecContext* codec_ctx, AVFrame* frame, cv::Mat& img) {
+	struct SwsContext* sws_ctx = sws_getContext(
+		codec_ctx->width, codec_ctx->height, codec_ctx->pix_fmt,
+		codec_ctx->width, codec_ctx->height, AV_PIX_FMT_BGR24,
+		SWS_BILINEAR, nullptr, nullptr, nullptr);
+
+	img.create(codec_ctx->height, codec_ctx->width, CV_8UC3);
+	uint8_t* dest[4] = { img.data, nullptr, nullptr, nullptr };
+	int dest_linesize[4] = { img.step[0], 0, 0, 0 };
+
+	sws_scale(sws_ctx, frame->data, frame->linesize, 0, codec_ctx->height, dest, dest_linesize);
+	//int frameSizeKB = (img.cols * img.rows * img.channels()) / 1024;
+	//std::cout << "CV2 Frame size: " << frameSizeKB << " KB" << " Width: " << img.cols << " Height: " << img.rows << std::endl;
+	sws_freeContext(sws_ctx);
+}
+
+
 int FrameCodec::open_output_file(const char* filename) {
 	std::cout<<"=====================\n";
 	std::cout<<"open_output_file\n";
@@ -253,16 +462,19 @@ int FrameCodec::open_output_file(const char* filename) {
 				av_log(NULL, AV_LOG_ERROR, "avcodec_alloc_context3 Cannot allocate encoder context\n");
 				return AVERROR(ENOMEM);
 			}
+			
 
 			if (dec_ctx->codec_type == AVMEDIA_TYPE_VIDEO) {
 				enc_ctx->height = dec_ctx->height;
 				enc_ctx->width = dec_ctx->width;
 				enc_ctx->sample_aspect_ratio = dec_ctx->sample_aspect_ratio;
 				enc_ctx->time_base = av_inv_q(dec_ctx->framerate);
-				//enc_ctx->framerate = dec_ctx->framerate;
-				//enc_ctx->gop_size = 0;
-				//enc_ctx->max_b_frames = 0;
-				//enc_ctx->bit_rate = 400000;
+
+				enc_ctx->framerate = dec_ctx->framerate;
+				enc_ctx->gop_size = 0;
+				enc_ctx->max_b_frames = 0;
+				enc_ctx->bit_rate = 400000;
+				
 				//enc_ctx->codec_tag = 0;
 				if (enc_ctx->pix_fmt) {
 					enc_ctx->pix_fmt = encoder->pix_fmts[0];
@@ -572,4 +784,61 @@ void FrameCodec::free_resource() {
 	if (ofmt_ctx && !(ofmt_ctx->oformat->flags & AVFMT_NOFILE))
 		avio_closep(&ofmt_ctx->pb);
 	avformat_free_context(ofmt_ctx);
+}
+
+
+void FrameCodec::convert_frame(AVFrame* src_frame, AVFrame** dst_frame, AVPixelFormat dst_pix_fmt) {
+	SwsContext* sws_ctx = sws_getContext(
+		src_frame->width, src_frame->height, AV_PIX_FMT_YUYV422,
+		src_frame->width, src_frame->height, AV_PIX_FMT_YUV420P,
+		SWS_BILINEAR, NULL, NULL, NULL
+	); assert(sws_ctx);
+
+	int ret = av_frame_get_buffer(*dst_frame, 32); 
+	if (ret < 0) {
+		fprintf(stderr, "Error allocating frame buffer\n");
+		av_frame_free(dst_frame);
+		sws_freeContext(sws_ctx);
+		return;
+	}
+	(*dst_frame)->pts = src_frame->pts;
+
+	ret = sws_scale(sws_ctx, src_frame->data, src_frame->linesize, 0, src_frame->height, (*dst_frame)->data, (*dst_frame)->linesize);
+	assert(ret >= 0);
+
+	sws_freeContext(sws_ctx);
+}
+
+
+void FrameCodec::prepare420PFrame() {
+	int ret = 0;
+	int stream_index = 0;
+	pframe420P = av_frame_alloc();
+	if (ret < 0) {
+		fprintf(stderr, "Error allocating frame buffer\n");
+		av_frame_free(&pframe420P);
+		return;
+	}
+	pframe420P->width = stream_ctx[stream_index].dec_ctx->width;
+	pframe420P->height = stream_ctx[stream_index].dec_ctx->height;
+	pframe420P->format = AV_PIX_FMT_YUV420P;
+
+	std::cout<<"Prepare 420P frame\n";
+}
+
+
+void FrameCodec::displayH264FrameOpenCV(AVCodecContext dec_ctx, AVPacket* pkt) {
+	AVFrame* decoded_frame = av_frame_alloc(); assert(decoded_frame);
+	int ret = avcodec_send_packet(&dec_ctx, pkt); assert(ret >= 0);
+	ret = avcodec_receive_frame(&dec_ctx, decoded_frame); assert(ret >= 0);
+	SwsContext* sws_ctx = sws_getContext(
+		dec_ctx.width, dec_ctx.height, dec_ctx.pix_fmt,
+		dec_ctx.width, dec_ctx.height, AV_PIX_FMT_BGR24,
+		SWS_BILINEAR, NULL, NULL, NULL
+	); assert(sws_ctx);
+	cv::Mat img(dec_ctx.height, dec_ctx.width, CV_8UC3);
+	uint8_t* data[4] = { img.data, nullptr, nullptr, nullptr };
+	int linesize[4] = { img.step, 0, 0, 0 };
+	sws_scale(sws_ctx, decoded_frame->data, decoded_frame->linesize, 0, dec_ctx.height, data, linesize);
+
 }
